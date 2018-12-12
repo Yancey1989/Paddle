@@ -224,6 +224,7 @@ class TestDistBase(unittest.TestCase):
     def setUp(self):
         self._trainers = 2
         self._pservers = 2
+        self._port_set = set()
         self._ps_endpoints = "127.0.0.1:%s,127.0.0.1:%s" % (
             self._find_free_port(), self._find_free_port())
         self._python_interp = sys.executable
@@ -238,9 +239,17 @@ class TestDistBase(unittest.TestCase):
         self._after_setup_config()
 
     def _find_free_port(self):
-        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-            s.bind(('', 0))
-            return s.getsockname()[1]
+        def __free_port():
+            with closing(socket.socket(socket.AF_INET,
+                                       socket.SOCK_STREAM)) as s:
+                s.bind(('', 0))
+                return s.getsockname()[1]
+
+        while True:
+            port = __free_port()
+            if port not in self._port_set:
+                self._port_set.add(port)
+                return port
 
     def start_pserver(self, model_file, check_error_log, required_envs):
         ps0_ep, ps1_ep = self._ps_endpoints.split(",")
@@ -378,18 +387,6 @@ class TestDistBase(unittest.TestCase):
             stderr=tr1_pipe,
             env=env1)
 
-        # Wait until trainer process terminate
-        while True:
-            stat0 = tr0_proc.poll()
-            time.sleep(0.1)
-            if stat0 is not None:
-                break
-        while True:
-            stat1 = tr1_proc.poll()
-            time.sleep(0.1)
-            if stat1 is not None:
-                break
-
         tr0_out, tr0_err = tr0_proc.communicate()
         tr1_out, tr1_err = tr1_proc.communicate()
 
@@ -402,21 +399,11 @@ class TestDistBase(unittest.TestCase):
         ps0.terminate()
         ps1.terminate()
 
-        # print server log
-        with open("/tmp/ps0_err.log", "r") as fn:
-            sys.stderr.write("ps0 stderr: %s\n" % fn.read())
-        with open("/tmp/ps1_err.log", "r") as fn:
-            sys.stderr.write("ps1 stderr: %s\n" % fn.read())
-
         # print log
-        if stat0 == 0:
-            sys.stderr.write('trainer 0 stdout: %s\n' % pickle.loads(tr0_out))
-        with open("/tmp/tr0_err.log", "r") as fn:
-            sys.stderr.write('trainer 0 stderr: %s\n' % fn.read())
-        if stat1 == 0:
-            sys.stderr.write('trainer 1 stdout: %s\n' % pickle.loads(tr1_out))
-        with open("/tmp/tr1_err.log", "r") as fn:
-            sys.stderr.write('trainer 1 stderr: %s\n' % fn.read())
+        sys.stderr.write('trainer 0 stdout: %s\n' % pickle.loads(tr0_out))
+        sys.stderr.write('trainer 0 stderr: %s\n' % tr0_err)
+        sys.stderr.write('trainer 1 stdout: %s\n' % pickle.loads(tr1_out))
+        sys.stderr.write('trainer 1 stderr: %s\n' % tr1_err)
 
         return pickle.loads(tr0_out), pickle.loads(tr1_out)
 
@@ -496,7 +483,6 @@ class TestDistBase(unittest.TestCase):
             "PYTHONPATH": os.getenv("PYTHONPATH", ""),
             "LD_LIBRARY_PATH": os.getenv("LD_LIBRARY_PATH", ""),
             "FLAGS_fraction_of_gpu_memory_to_use": "0.15",
-            "FLAGS_rpc_deadline": "5000",  # 5sec to fail fast
             "FLAGS_cudnn_deterministic": "1",
             "http_proxy": "",
             "NCCL_P2P_DISABLE": "1"
